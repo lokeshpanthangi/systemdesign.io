@@ -223,13 +223,29 @@ export default function Practice() {
                   acc += event.content;
                   setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: acc } : m)));
                 } else if (event.type === "status" && event.content) {
-                  setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: acc + "\n\n*" + event.content + "*" } : m)));
-                } else if (event.type === "error") throw new Error(event.content);
-              } catch (pe) {
-                if (jsonStr && !jsonStr.startsWith("ERROR:")) {
-                  acc += jsonStr;
-                  setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: acc } : m)));
+                  setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: acc || `*${event.content}*` } : m)));
+                } else if (event.type === "building" && event.content) {
+                  const progress = event.progress ? ` (${event.progress})` : "";
+                  setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: `*${event.content}${progress}*` } : m)));
+                } else if (event.type === "diagram_update" && event.elements && excalidrawAPI) {
+                  // MERGE by ID: updates overwrite existing, new elements get added
+                  const existingElements = excalidrawAPI.getSceneElements();
+                  const elementMap = new Map<string, any>();
+                  existingElements.forEach((e: any) => elementMap.set(e.id, e));
+                  event.elements.forEach((e: any) => elementMap.set(e.id, e));
+                  excalidrawAPI.updateScene({
+                    elements: Array.from(elementMap.values()),
+                  });
+                } else if (event.type === "done") {
+                  // Restore the final AI text response (strip building status)
+                  if (acc) {
+                    setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: acc } : m)));
+                  }
+                } else if (event.type === "error" && event.content) {
+                  setChatMessages((prev) => prev.map((m) => (m.id === aiMessageId ? { ...m, content: `❌ Error: ${event.content}` } : m)));
                 }
+              } catch {
+                // Only treat as raw text if it's not a broken JSON event
               }
             }
           }

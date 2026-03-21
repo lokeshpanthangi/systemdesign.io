@@ -1,142 +1,397 @@
-import { Home, List, TrendingUp, Settings, LogOut, ChevronLeft, ChevronRight, Compass } from "lucide-react";
-import { NavLink, useNavigate } from "react-router-dom";
+"use client";
+
+import React, { useState, createContext, useContext } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { 
+  Menu, 
+  X, 
+  Home,
+  LayoutDashboard,
+  Settings,
+  Users,
+  FileText,
+  BarChart3,
+  Bell,
+  Search,
+  Moon,
+  Sun,
+  ChevronDown,
+  ChevronsRight,
+  LogOut,
+  User as UserIcon,
+  List,
+  TrendingUp,
+  Compass
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { useSidebar } from "@/contexts/SidebarContext";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { NavLink, useNavigate } from "react-router-dom";
+import { useSidebar as useGlobalSidebar } from "@/contexts/SidebarContext";
 import { authService } from "@/services/authService";
-import { useEffect, useState } from "react";
-import type { User } from "@/types/api";
-import { Logo } from "@/components/Logo";
 
-export const AppSidebar = () => {
-  const navigate = useNavigate();
-  const { isCollapsed, toggleSidebar } = useSidebar();
-  const [user, setUser] = useState<User | null>(null);
+// --- START OF PROVIDED COMPONENTS ---
 
-  useEffect(() => {
-    // Load user from localStorage or fetch from API
-    const storedUser = authService.getStoredUser();
-    if (storedUser) {
-      setUser(storedUser);
+interface Links {
+  label: string;
+  href: string;
+  icon: React.JSX.Element | React.ReactNode;
+}
+
+interface SidebarContextProps {
+  open: boolean;
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  animate: boolean;
+}
+
+const SidebarContext = createContext<SidebarContextProps | undefined>(undefined);
+
+export const useSidebar = () => {
+  const context = useContext(SidebarContext);
+  if (!context) {
+    throw new Error("useSidebar must be used within a SidebarProvider");
+  }
+  return context;
+};
+
+export const SidebarProvider = ({
+  children,
+  open: openProp,
+  setOpen: setOpenProp,
+  animate = true,
+}: {
+  children: React.ReactNode;
+  open?: boolean;
+  setOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  animate?: boolean;
+}) => {
+  const [openState, setOpenState] = useState(false);
+  const open = openProp !== undefined ? openProp : openState;
+  const setOpen = setOpenProp !== undefined ? setOpenProp : setOpenState;
+
+  return (
+    <SidebarContext.Provider value={{ open, setOpen, animate }}>
+      {children}
+    </SidebarContext.Provider>
+  );
+};
+
+export const ModernSidebar = ({
+  children,
+  open,
+  setOpen,
+  animate,
+}: {
+  children: React.ReactNode;
+  open?: boolean;
+  setOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  animate?: boolean;
+}) => {
+  return (
+    <SidebarProvider open={open} setOpen={setOpen} animate={animate}>
+      {children}
+    </SidebarProvider>
+  );
+};
+
+export const SidebarBody = (props: React.ComponentProps<typeof motion.div>) => {
+  return (
+    <>
+      <DesktopSidebar {...props} />
+      <MobileSidebar {...(props as React.ComponentProps<"div">)} />
+    </>
+  );
+};
+
+export const DesktopSidebar = ({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof motion.div>) => {
+  const { open, setOpen, animate } = useSidebar();
+  return (
+    <motion.div
+      className={cn(
+        "h-full px-4 py-4 hidden md:flex md:flex-col bg-background border-r border-border w-[280px] flex-shrink-0",
+        // Added fixed to prevent layout breakage with the current app's main tag
+        "fixed left-0 top-0 z-50",
+        className
+      )}
+      animate={{
+        width: animate ? (open ? "280px" : "80px") : "280px",
+      }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      {...props}
+    >
+      {children}
+    </motion.div>
+  );
+};
+
+export const MobileSidebar = ({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<"div">) => {
+  const { open, setOpen } = useSidebar();
+  return (
+    <>
+      <div
+        className={cn(
+          "h-16 px-4 py-4 flex flex-row md:hidden items-center justify-between bg-background border-b border-border w-full fixed left-0 top-0 z-50"
+        )}
+        {...props}
+      >
+        <div className="flex items-center gap-2">
+          <Logo />
+        </div>
+        <div className="flex justify-end z-20">
+          <Menu
+            className="text-foreground cursor-pointer"
+            onClick={() => setOpen(!open)}
+          />
+        </div>
+        <AnimatePresence>
+          {open && (
+            <motion.div
+              initial={{ x: "-100%", opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "-100%", opacity: 0 }}
+              transition={{
+                duration: 0.3,
+                ease: "easeInOut",
+              }}
+              className={cn(
+                "fixed h-full w-full inset-0 bg-background p-10 z-[100] flex flex-col justify-between",
+                className
+              )}
+            >
+              <div
+                className="absolute right-10 top-10 z-50 text-foreground cursor-pointer"
+                onClick={() => setOpen(!open)}
+              >
+                <X />
+              </div>
+              {children}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </>
+  );
+};
+
+export const SidebarLink = ({
+  link,
+  className,
+  ...props
+}: {
+  link: Links;
+  className?: string;
+  props?: any;
+}) => {
+  const { open, animate } = useSidebar();
+  return (
+    <NavLink
+      to={link.href}
+      className={({ isActive }) => cn(
+        "flex items-center justify-start gap-3 group/sidebar py-3 px-3 rounded-lg transition-all hover:bg-muted",
+        isActive ? "bg-muted text-primary" : "",
+        className
+      )}
+      {...props}
+    >
+      <div className="text-foreground">{link.icon}</div>
+      <motion.span
+        animate={{
+          display: animate ? (open ? "inline-block" : "none") : "inline-block",
+          opacity: animate ? (open ? 1 : 0) : 1,
+        }}
+        className="text-foreground text-sm font-medium group-hover/sidebar:translate-x-1 transition duration-150 whitespace-pre inline-block !p-0 !m-0"
+      >
+        {link.label}
+      </motion.span>
+    </NavLink>
+  );
+};
+
+const Logo = () => {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
+        <LayoutDashboard className="h-5 w-5 text-primary-foreground" />
+      </div>
+      <span className="font-bold text-lg text-foreground">SystemDesign</span>
+    </div>
+  );
+};
+
+const LogoIcon = () => {
+  return (
+    <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
+      <LayoutDashboard className="h-5 w-5 text-primary-foreground" />
+    </div>
+  );
+};
+
+const ThemeToggle = () => {
+  // Read from existing class toggle or define simple dark local state
+  // Usually dark mode is handled globally, but here we can just toggle document element
+  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
+
+  const toggle = () => {
+    setIsDark(!isDark);
+    if (!isDark) {
+      document.documentElement.classList.add("dark");
     } else {
-      // Fetch current user
-      authService.getCurrentUser()
-        .then(setUser)
-        .catch(console.error);
+      document.documentElement.classList.remove("dark");
     }
-  }, []);
+  };
 
-  const navItems = [
-    { title: "Dashboard", url: "/dashboard", icon: Home },
-    { title: "Explore", url: "/explore", icon: Compass },
-    { title: "All Questions", url: "/questions", icon: List },
-    { title: "My Progress", url: "/progress", icon: TrendingUp },
-    { title: "Settings", url: "/settings", icon: Settings },
-  ];
+  return (
+    <div
+      className={cn(
+        "flex w-16 h-8 p-1 rounded-full cursor-pointer transition-all duration-300",
+        isDark 
+          ? "bg-zinc-950 border border-zinc-800" 
+          : "bg-white border border-zinc-200"
+      )}
+      onClick={toggle}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="flex justify-between items-center w-full">
+        <div
+          className={cn(
+            "flex justify-center items-center w-6 h-6 rounded-full transition-transform duration-300",
+            isDark 
+              ? "transform translate-x-0 bg-zinc-800" 
+              : "transform translate-x-8 bg-gray-200"
+          )}
+        >
+          {isDark ? (
+            <Moon className="w-4 h-4 text-white" strokeWidth={1.5} />
+          ) : (
+            <Sun className="w-4 h-4 text-gray-700" strokeWidth={1.5} />
+          )}
+        </div>
+        <div
+          className={cn(
+            "flex justify-center items-center w-6 h-6 rounded-full transition-transform duration-300",
+            isDark 
+              ? "bg-transparent" 
+              : "transform -translate-x-8"
+          )}
+        >
+          {isDark ? (
+            <Sun className="w-4 h-4 text-gray-500" strokeWidth={1.5} />
+          ) : (
+            <Moon className="w-4 h-4 text-black" strokeWidth={1.5} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const UserProfile = () => {
+  const { open } = useSidebar();
+  const navigate = useNavigate();
+  const [user, setUser] = useState<any>(null);
+
+  React.useEffect(() => {
+    setUser(authService.getStoredUser());
+  }, []);
 
   const handleLogout = () => {
     authService.logout();
     navigate("/");
   };
+  
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted cursor-pointer transition-colors">
+          <Avatar className="h-9 w-9 border-2 border-border">
+            <AvatarImage src={`https://ui-avatars.com/api/?name=${user?.first_name || 'User'}`} alt="User" />
+            <AvatarFallback>US</AvatarFallback>
+          </Avatar>
+          {open && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex-1 min-w-0"
+            >
+              <p className="text-sm font-semibold text-foreground truncate">{user?.first_name || 'User'}</p>
+              <p className="text-xs text-muted-foreground truncate">{user?.email || 'user@example.com'}</p>
+            </motion.div>
+          )}
+          {open && <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={() => navigate("/settings")}>
+          <UserIcon className="mr-2 h-4 w-4" />
+          <span>Profile</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate("/settings")}>
+          <Settings className="mr-2 h-4 w-4" />
+          <span>Settings</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive" onClick={handleLogout}>
+          <LogOut className="mr-2 h-4 w-4" />
+          <span>Log out</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
+// --- END OF PROVIDED COMPONENTS ---
+
+// THIS IS THE MAIN EXPORT FOR THE APP
+export const AppSidebar = () => {
+  // Sync the external global context isCollapsed with the internal ModernSidebar open
+  const { isCollapsed, setIsCollapsed } = useGlobalSidebar();
+  
+  const links = [
+    { label: "Dashboard", href: "/dashboard", icon: <Home className="h-5 w-5" /> },
+    { label: "Explore", href: "/explore", icon: <Compass className="h-5 w-5" /> },
+    { label: "All Questions", href: "/questions", icon: <List className="h-5 w-5" /> },
+    { label: "My Progress", href: "/progress", icon: <TrendingUp className="h-5 w-5" /> },
+    { label: "Settings", href: "/settings", icon: <Settings className="h-5 w-5" /> },
+  ];
 
   return (
-    <aside className={cn(
-      "fixed left-0 top-0 h-screen bg-sidebar border-r border-sidebar-border flex flex-col transition-all duration-300 ease-in-out z-50",
-      isCollapsed ? "w-16" : "w-64"
-    )}>
-      {/* Logo */}
-      <div className={cn(
-        "border-b border-sidebar-border flex items-center justify-between",
-        isCollapsed ? "p-4" : "p-6"
-      )}>
-        {isCollapsed ? (
-          <Logo size={28} className="text-primary" />
-        ) : (
-          <div className="flex items-center gap-3">
-            <Logo size={32} className="text-primary" />
-            <div>
-              <h1 className="text-xl font-bold text-primary">SystemDesign.io</h1>
-              <p className="text-xs text-muted-foreground mt-1">Master system design</p>
+    <ModernSidebar open={!isCollapsed} setOpen={(val) => setIsCollapsed(!val)}>
+      <SidebarBody className="justify-between gap-10">
+        <div className="flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
+          {!isCollapsed ? <Logo /> : <LogoIcon />}
+          <div className="mt-8 flex flex-col gap-2">
+            {links.map((link, idx) => (
+              <SidebarLink key={idx} link={link} />
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col gap-4">
+          {!isCollapsed && (
+            <div className="px-3 flex items-center justify-between">
+              <span className="text-sm font-medium text-muted-foreground">Theme</span>
+              <ThemeToggle />
             </div>
-          </div>
-        )}
-        <button
-          onClick={toggleSidebar}
-          className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors"
-          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="w-4 h-4 text-sidebar-foreground" />
-          ) : (
-            <ChevronLeft className="w-4 h-4 text-sidebar-foreground" />
           )}
-        </button>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.url}
-            to={item.url}
-            end={item.url === "/dashboard"}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center rounded-lg text-sm font-medium transition-smooth",
-                isCollapsed ? "justify-center p-3" : "gap-3 px-4 py-3",
-                isActive
-                  ? "bg-sidebar-accent text-sidebar-primary"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-              )
-            }
-            title={isCollapsed ? item.title : undefined}
-          >
-            <item.icon className="w-5 h-5 flex-shrink-0" />
-            {!isCollapsed && <span>{item.title}</span>}
-          </NavLink>
-        ))}
-      </nav>
-
-      {/* User Profile */}
-      <div className="p-4 border-t border-sidebar-border">
-        {user && (
-          <div className={cn(
-            "flex items-center rounded-lg bg-sidebar-accent",
-            isCollapsed ? "justify-center p-2" : "gap-3 p-3"
-          )}>
-            <div className="w-10 h-10 rounded-full bg-orange-500 flex items-center justify-center flex-shrink-0 text-white font-semibold">
-              {user.first_name[0]}{user.last_name[0]}
-            </div>
-            {!isCollapsed && (
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-sidebar-foreground truncate">
-                  {user.first_name} {user.last_name}
-                </p>
-                <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {/* Theme Toggle */}
-        {!isCollapsed && (
-          <div className="mt-2">
-            <ThemeToggle />
-          </div>
-        )}
-        
-        <button
-          onClick={handleLogout}
-          className={cn(
-            "w-full flex items-center text-sm text-muted-foreground hover:text-foreground transition-smooth mt-2",
-            isCollapsed ? "justify-center p-2" : "gap-2 px-4 py-2"
-          )}
-          title={isCollapsed ? "Logout" : undefined}
-        >
-          <LogOut className="w-4 h-4 flex-shrink-0" />
-          {!isCollapsed && <span>Logout</span>}
-        </button>
-      </div>
-    </aside>
+          <UserProfile />
+        </div>
+      </SidebarBody>
+    </ModernSidebar>
   );
 };

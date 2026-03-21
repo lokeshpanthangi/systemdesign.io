@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -15,14 +16,15 @@ from bson import ObjectId
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from .chat_agent.graph import create_chat_agent_graph
-from .chat_agent.tools import execute_get_page_context
-from .tools.excalidraw_extractor import extract_excalidraw_components
-from .prompts.chat_agent_prompt import CHAT_AGENT_SYSTEM_PROMPT
+from Agents.chat_agent.graph import create_chat_agent_graph
+from Agents.chat_agent.tools import execute_get_page_context
+from Agents.tools.excalidraw_extractor import extract_excalidraw_components
+from Agents.prompts.chat_agent_prompt import CHAT_AGENT_SYSTEM_PROMPT
 
 from auth import get_current_user
 from models import User
 from database import db
+
 
 chat = APIRouter(prefix="/sessions", tags=["AI Chat"])
 
@@ -48,7 +50,6 @@ async def chat_with_ai(
 ):
     """Stream AI chat response using LangGraph agent with SSE."""
     
-    # Get session
     sessions_collection = db.get_collection("sessions")
     session = await sessions_collection.find_one({
         "_id": ObjectId(session_id),
@@ -58,7 +59,6 @@ async def chat_with_ai(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Get problem details
     problems_collection = db.get_collection("problems")
     problem = await problems_collection.find_one({
         "_id": ObjectId(session["problem_id"])
@@ -67,31 +67,26 @@ async def chat_with_ai(
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
     
-    # Extract context
     problem_title = problem.get("title", "System Design Problem")
     problem_description = problem.get("description", "No description provided.")
     requirements = ", ".join(problem.get("requirements", []))
     diagram_data = request.diagram_data
     
-    # Get or initialize chat history
     if session_id not in chat_histories:
         chat_histories[session_id] = []
     
     history = chat_histories[session_id]
     
-    # Build LangGraph messages from history
     langchain_messages = []
-    for msg in history[-10:]:  # Last 10 messages (5 Q/A pairs)
+    for msg in history[-10:]:
         if msg["role"] == "user":
             langchain_messages.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant":
             langchain_messages.append(AIMessage(content=msg["content"]))
     
-    # Add current user message
     langchain_messages.append(HumanMessage(content=request.message))
     history.append({"role": "user", "content": request.message})
     
-    # Create the agent graph with current session context
     graph = create_chat_agent_graph(
         problem_title=problem_title,
         problem_description=problem_description,
@@ -99,43 +94,65 @@ async def chat_with_ai(
         diagram_data=diagram_data
     )
     
-    # Stream response via SSE
     async def generate_stream():
         collected_response = ""
+        
         try:
-            # Use astream_events to get token-level streaming
+            # ── Phase 1: Stream the LLM response ──────────────────────────
+            # on_tool_start/on_tool_end do NOT fire for our custom tool_node,
+            # so we detect tool usage via on_chain_start for the "tools" node.
             async for event in graph.astream_events(
                 {"messages": langchain_messages},
                 version="v2"
             ):
                 kind = event.get("event", "")
                 
-                # Stream tokens from the LLM (chat model stream events)
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
-                        # Only stream text content, not tool calls
                         if not (hasattr(chunk, "tool_calls") and chunk.tool_calls):
                             token = chunk.content
                             collected_response += token
                             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
                 
-                # Notify when tool is being called
-                elif kind == "on_tool_start":
-                    yield f"data: {json.dumps({'type': 'status', 'content': 'Analyzing your diagram...'})}\n\n"
+                elif kind == "on_chain_start":
+                    node_name = event.get("name", "")
+                    if node_name == "tools":
+                        yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Working on it...'})}\n\n"
             
-            # Send done signal
+            # ── Phase 2: Stream diagram elements (after graph completes) ──
+            batches = getattr(graph, '_streamed_diagram_batches', [])
+            if batches:
+                yield f"data: {json.dumps({'type': 'status', 'content': '🎨 Building your diagram...'})}\n\n"
+                
+                cool_emojis = ["✏️", "🔧", "⚡", "🧱", "🔗", "🎯", "📐", "🏗️"]
+                total = len(batches)
+                
+                for idx, batch in enumerate(batches):
+                    label = batch.get("label", "Building...")
+                    elements = batch.get("elements", [])
+                    emoji = cool_emojis[idx % len(cool_emojis)]
+                    progress = f"{idx + 1}/{total}"
+                    
+                    yield f"data: {json.dumps({'type': 'building', 'content': f'{emoji} {label}', 'progress': progress})}\n\n"
+                    
+                    if elements:
+                        yield f"data: {json.dumps({'type': 'diagram_update', 'elements': elements})}\n\n"
+                    
+                    await asyncio.sleep(0.12)
+            
+            # ── Phase 3: Done ─────────────────────────────────────────────
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             
-            # Save assistant response to history
             if collected_response:
                 history.append({"role": "assistant", "content": collected_response})
             
-            # Trim history to last 10 messages
             if len(history) > 10:
                 chat_histories[session_id] = history[-10:]
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
     
     return StreamingResponse(
