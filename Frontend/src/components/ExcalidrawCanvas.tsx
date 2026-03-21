@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import { useTheme } from "next-themes";
-import { ExcalidrawElement, AppState, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types/types";
+
+type ExcalidrawElement = any;
+type AppState = any;
+type ExcalidrawImperativeAPI = any;
 
 interface ExcalidrawCanvasProps {
   onSceneUpdate?: (elements: ExcalidrawElement[], appState: AppState) => void;
@@ -345,24 +348,6 @@ const ExcalidrawCanvas = forwardRef<ExcalidrawCanvasRef, ExcalidrawCanvasProps>(
               toggleTheme: false,
             },
           }}
-          renderTopRightUI={() => (
-            <div className="flex gap-2 p-2">
-              <button
-                className="px-3 py-1 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
-                onClick={addSystemDiagramTemplate}
-                title="Add System Architecture Template"
-              >
-                System Template
-              </button>
-              <button
-                className="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-                onClick={addFlowchartTemplate}
-                title="Add Flowchart Template"
-              >
-                Flowchart Template
-              </button>
-            </div>
-          )}
         >
           <MainMenu>
             <MainMenu.DefaultItems.ClearCanvas />

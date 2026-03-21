@@ -1,50 +1,35 @@
+"""
+AI Chat Route — LangGraph Agent with SSE Streaming
+Sidebar chat that acts as a system design mentor.
+Uses a LangGraph agent that can optionally fetch page context.
+"""
 from dotenv import load_dotenv
 load_dotenv()
-import os
+
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, List
 from bson import ObjectId
 
-chat = APIRouter(prefix="/sessions", tags=["AI Chat"])
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
-# Import excalidraw extractor (same as check agent)
+from .chat_agent.graph import create_chat_agent_graph
+from .chat_agent.tools import execute_get_page_context
 from .tools.excalidraw_extractor import extract_excalidraw_components
+from .prompts.chat_agent_prompt import CHAT_AGENT_SYSTEM_PROMPT
 
-# Import auth and database
 from auth import get_current_user
 from models import User
 from database import db
 
-model = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.1, max_tokens=250)
-parser = StrOutputParser()
+chat = APIRouter(prefix="/sessions", tags=["AI Chat"])
 
-chat_prompt = PromptTemplate(
-    input_variables=["problem_title", "requirements", "implemented", "chat_history", "Query"],
-    template="""You are a helpful System Design assistant. 
-
-Problem: {problem_title}
-Requirements: {requirements}
-Current Diagram: {implemented}
-Chat History: {chat_history}
-
-User Question: {Query}
-
-Provide a helpful, concise response. Give hints, not direct solutions. Guide them step by step always try to keep the answer short , Crisp uptothe mark with bullet points, not paragraphs."""
-)
-
-chain = chat_prompt | model | parser
-
-# Store chat history per session
-chat_histories: Dict[str, list] = {}
+# Store chat history per session (in-memory, keyed by session_id)
+chat_histories: Dict[str, List] = {}
 
 
-# Request model
 class ChatRequest(BaseModel):
     message: str
     diagram_data: Dict[Any, Any] = {}
@@ -61,9 +46,9 @@ async def chat_with_ai(
     request: ChatRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """Generate STREAMING AI chat response based on problem context"""
+    """Stream AI chat response using LangGraph agent with SSE."""
     
-    # Get session to retrieve problem data
+    # Get session
     sessions_collection = db.get_collection("sessions")
     session = await sessions_collection.find_one({
         "_id": ObjectId(session_id),
@@ -82,54 +67,76 @@ async def chat_with_ai(
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
     
-    # STEP 1: Extract problem_title
+    # Extract context
     problem_title = problem.get("title", "System Design Problem")
-    
-    # STEP 2: Extract requirements (join them into a string)
+    problem_description = problem.get("description", "No description provided.")
     requirements = ", ".join(problem.get("requirements", []))
+    diagram_data = request.diagram_data
     
-    # STEP 3: Extract diagram data using excalidraw_extractor (like check agent)
-    implemented = extract_excalidraw_components.invoke({"diagram_data": request.diagram_data})
-    
-    # STEP 4: Get or initialize chat history for this session
+    # Get or initialize chat history
     if session_id not in chat_histories:
         chat_histories[session_id] = []
     
-    chat_history = chat_histories[session_id]
+    history = chat_histories[session_id]
     
-    # STEP 5: User's query
-    Query = request.message
+    # Build LangGraph messages from history
+    langchain_messages = []
+    for msg in history[-10:]:  # Last 10 messages (5 Q/A pairs)
+        if msg["role"] == "user":
+            langchain_messages.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            langchain_messages.append(AIMessage(content=msg["content"]))
     
-    # Add user message to history
-    chat_history.append({"role": "user", "content": Query})
+    # Add current user message
+    langchain_messages.append(HumanMessage(content=request.message))
+    history.append({"role": "user", "content": request.message})
     
-    # STEP 6: Stream response generator
+    # Create the agent graph with current session context
+    graph = create_chat_agent_graph(
+        problem_title=problem_title,
+        problem_description=problem_description,
+        problem_requirements=requirements,
+        diagram_data=diagram_data
+    )
+    
+    # Stream response via SSE
     async def generate_stream():
         collected_response = ""
         try:
-            # Stream tokens from LLM
-            async for chunk in chain.astream({
-                "problem_title": problem_title,
-                "requirements": requirements,
-                "implemented": implemented,
-                "chat_history": str(chat_history[-10:]),  # Last 5 Q/A pairs
-                "Query": Query
-            }):
-                # Each chunk is a string token
-                if chunk:
-                    collected_response += chunk
-                    # Send as Server-Sent Event
-                    yield f"data: {chunk}\n\n"
+            # Use astream_events to get token-level streaming
+            async for event in graph.astream_events(
+                {"messages": langchain_messages},
+                version="v2"
+            ):
+                kind = event.get("event", "")
+                
+                # Stream tokens from the LLM (chat model stream events)
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        # Only stream text content, not tool calls
+                        if not (hasattr(chunk, "tool_calls") and chunk.tool_calls):
+                            token = chunk.content
+                            collected_response += token
+                            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                
+                # Notify when tool is being called
+                elif kind == "on_tool_start":
+                    yield f"data: {json.dumps({'type': 'status', 'content': 'Analyzing your diagram...'})}\n\n"
             
-            # After streaming completes, save to history
-            chat_history.append({"role": "assistant", "content": collected_response})
+            # Send done signal
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
             
-            # Keep only last 10 messages (5 Q/A pairs)
-            if len(chat_history) > 10:
-                chat_histories[session_id] = chat_history[-10:]
+            # Save assistant response to history
+            if collected_response:
+                history.append({"role": "assistant", "content": collected_response})
+            
+            # Trim history to last 10 messages
+            if len(history) > 10:
+                chat_histories[session_id] = history[-10:]
                 
         except Exception as e:
-            yield f"data: ERROR: {str(e)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
     
     return StreamingResponse(
         generate_stream(),
@@ -140,4 +147,3 @@ async def chat_with_ai(
             "Connection": "keep-alive"
         }
     )
-    

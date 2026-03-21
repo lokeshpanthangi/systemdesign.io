@@ -47,13 +47,11 @@ Return ONLY JSON array:
 
 Prefer real, well-known URLs."""
 
-        user_prompt = f"""Problem: {problem_data.get('title', 'System Design')}
+        user_prompt = f"""Problem: System design of {problem_data.get('title', 'System Design')}
 
-Categories: {', '.join(problem_data.get('categories', [])[:3])}
+Missing concepts: {', '.join(missing_concepts[:5])}
 
-Missing: {', '.join(missing_concepts[:5])}
-
-Suggest docs/articles."""
+Suggest docs/articles specifically about designing {problem_data.get('title', 'systems')}."""
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),

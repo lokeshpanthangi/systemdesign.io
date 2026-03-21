@@ -115,6 +115,31 @@ export const streamChat = async (
 };
 
 /**
+ * Stream submission evaluation with SSE (progressive results)
+ */
+export const streamSubmit = async (
+  sessionId: string
+): Promise<Response> => {
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+  const accessToken = localStorage.getItem('access_token');
+  
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/submit-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to submit: ${response.status} - ${errorText}`);
+  }
+
+  return response;
+};
+
+/**
  * Abandon a session (user wants to start fresh)
  */
 export const abandonSession = async (sessionId: string): Promise<void> => {

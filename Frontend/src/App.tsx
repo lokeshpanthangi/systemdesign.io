@@ -11,6 +11,7 @@ import { Analytics } from "@vercel/analytics/next"
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
+import Explore from "./pages/Explore";
 import Questions from "./pages/Questions";
 import Progress from "./pages/Progress";
 import QuestionDetail from "./pages/QuestionDetail";
@@ -32,6 +33,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/auth" element={<Auth />} />
+                <Route path="/explore" element={<Explore />} />
                 <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/questions" element={<ProtectedRoute><Questions /></ProtectedRoute>} />
                 <Route path="/progress" element={<ProtectedRoute><Progress /></ProtectedRoute>} />

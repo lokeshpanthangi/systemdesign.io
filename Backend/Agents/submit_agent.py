@@ -1,12 +1,14 @@
 """
-Submit Agent
-Orchestrates the submission evaluation process:
-1. Scores the solution
-2. Generates tips
+Submit Agent — Streaming Chain
+Orchestrates the submission evaluation with SSE streaming:
+1. Streams scoring evaluation
+2. Streams tips generation
 3. Fetches learning resources (YouTube videos + docs)
 4. Returns comprehensive submission result
 """
-from typing import Dict, Any
+import json
+import asyncio
+from typing import Dict, Any, AsyncGenerator
 from .tools.scoring import score_solution
 from .tools.tips_generator import generate_tips
 from .tools.youtube_fetcher import fetch_youtube_videos
@@ -63,24 +65,28 @@ def extract_diagram_summary(diagram_data: Dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line)
 
 
-async def evaluate_submission(
+async def evaluate_submission_stream(
     problem_data: Dict[str, Any],
     diagram_data: Dict[str, Any]
-) -> Dict[str, Any]:
+) -> AsyncGenerator[str, None]:
     """
-    Main submission evaluation function.
+    Streaming version of evaluate_submission.
+    Yields SSE-formatted JSON events as each step completes.
     
-    Args:
-        problem_data: Problem requirements and metadata
-        diagram_data: User's Excalidraw diagram data
-    
-    Returns:
-        Complete submission result with score, feedback, tips, and resources
+    Events:
+      {"type": "status", "step": "scoring"} - Step started
+      {"type": "score_result", "data": {...}} - Scoring complete
+      {"type": "status", "step": "tips"} - Tips generation started
+      {"type": "tips_result", "data": [...]} - Tips complete
+      {"type": "status", "step": "resources"} - Resource fetch started
+      {"type": "resources_result", "data": {...}} - Resources complete
+      {"type": "done", "data": {...}} - Full result
     """
-    # Extract diagram summary
     diagram_str = extract_diagram_summary(diagram_data)
     
     # Step 1: Score the solution
+    yield f"data: {json.dumps({'type': 'status', 'step': 'scoring', 'message': 'Evaluating your solution...'})}\n\n"
+    
     scoring_result = await score_solution(problem_data, diagram_data, diagram_str)
     
     score = scoring_result.get("score", 0)
@@ -89,18 +95,26 @@ async def evaluate_submission(
     implemented = scoring_result.get("implemented", [])
     missing = scoring_result.get("missing", [])
     
-    # Step 2: Generate personalized tips
+    yield f"data: {json.dumps({'type': 'score_result', 'data': {'score': score, 'max_score': max_score, 'breakdown': breakdown, 'implemented': implemented, 'missing': missing}})}\n\n"
+    
+    # Step 2: Generate tips
+    yield f"data: {json.dumps({'type': 'status', 'step': 'tips', 'message': 'Generating improvement tips...'})}\n\n"
+    
     tips = await generate_tips(problem_data, scoring_result, diagram_str)
     
-    # Step 3: Fetch learning resources
-    # Run in parallel for speed
-    import asyncio
+    yield f"data: {json.dumps({'type': 'tips_result', 'data': tips})}\n\n"
+    
+    # Step 3: Fetch resources (in parallel)
+    yield f"data: {json.dumps({'type': 'status', 'step': 'resources', 'message': 'Finding learning resources...'})}\n\n"
+    
     videos_task = fetch_youtube_videos(problem_data, missing)
     docs_task = fetch_documentation(problem_data, missing)
     
     videos, docs = await asyncio.gather(videos_task, docs_task)
     
-    # Assemble final result
+    yield f"data: {json.dumps({'type': 'resources_result', 'data': {'videos': videos, 'docs': docs}})}\n\n"
+    
+    # Final complete result
     result = {
         "score": score,
         "max_score": max_score,
@@ -108,7 +122,7 @@ async def evaluate_submission(
         "feedback": {
             "implemented": implemented,
             "missing": missing,
-            "next_steps": tips[:3] if len(tips) > 3 else tips  # First 3 tips as next steps
+            "next_steps": tips[:3] if len(tips) > 3 else tips
         },
         "tips": tips,
         "resources": {
@@ -117,4 +131,47 @@ async def evaluate_submission(
         }
     }
     
-    return result
+    yield f"data: {json.dumps({'type': 'done', 'data': result})}\n\n"
+
+
+async def evaluate_submission(
+    problem_data: Dict[str, Any],
+    diagram_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Non-streaming version (backward compatibility).
+    Collects all streaming results and returns final dict.
+    """
+    diagram_str = extract_diagram_summary(diagram_data)
+    
+    # Step 1: Score
+    scoring_result = await score_solution(problem_data, diagram_data, diagram_str)
+    score = scoring_result.get("score", 0)
+    max_score = scoring_result.get("max_score", 100)
+    breakdown = scoring_result.get("breakdown", [])
+    implemented = scoring_result.get("implemented", [])
+    missing = scoring_result.get("missing", [])
+    
+    # Step 2: Tips
+    tips = await generate_tips(problem_data, scoring_result, diagram_str)
+    
+    # Step 3: Resources
+    videos_task = fetch_youtube_videos(problem_data, missing)
+    docs_task = fetch_documentation(problem_data, missing)
+    videos, docs = await asyncio.gather(videos_task, docs_task)
+    
+    return {
+        "score": score,
+        "max_score": max_score,
+        "breakdown": breakdown,
+        "feedback": {
+            "implemented": implemented,
+            "missing": missing,
+            "next_steps": tips[:3] if len(tips) > 3 else tips
+        },
+        "tips": tips,
+        "resources": {
+            "videos": videos,
+            "docs": docs
+        }
+    }

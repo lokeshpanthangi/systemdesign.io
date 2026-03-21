@@ -11,7 +11,7 @@ from bson import ObjectId
 import CRUD.session_crud as session_crud
 import CRUD.problem_crud as problem_crud
 from Agents.checking_agent import analyze_user_solution
-from Agents.submit_agent import evaluate_submission
+from Agents.submit_agent import evaluate_submission, evaluate_submission_stream
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -727,6 +727,130 @@ async def submit_solution(
         timestamp=datetime.utcnow()
     )
 
+
+@router.post("/{session_id}/submit-stream")
+async def submit_solution_stream(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Submit the user's solution with STREAMING evaluation.
+    
+    Returns SSE events as each evaluation step completes:
+    - status: step progress updates
+    - score_result: scoring data
+    - tips_result: improvement tips
+    - resources_result: videos and docs
+    - done: complete evaluation result
+    """
+    # Get session
+    session = await session_crud.get_session_by_id(session_id)
+    
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+    
+    # Verify ownership
+    if session["user_id"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this session"
+        )
+    
+    # Check if already submitted
+    if session.get("status") == "submitted":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session already submitted. Create a new session to try again."
+        )
+    
+    # Get problem data
+    problem = await problem_crud.get_problem_by_id(session["problem_id"])
+    
+    if not problem:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Problem not found"
+        )
+    
+    # Format problem data
+    problem_data = {
+        "title": problem.get("title", ""),
+        "description": problem.get("description", ""),
+        "requirements": problem.get("requirements", []),
+        "constraints": problem.get("constraints", []),
+        "hints": problem.get("hints", []),
+        "difficulty": problem.get("difficulty", ""),
+        "categories": problem.get("categories", [])
+    }
+    
+    # Get diagram data
+    diagram_data = session.get("diagram_data", {})
+    
+    # Validate diagram
+    elements = diagram_data.get("elements", [])
+    if not elements or len(elements) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot submit empty diagram. Please draw your solution first."
+        )
+    
+    # Streaming generator that also saves submission on completion
+    async def stream_and_save():
+        import json as _json
+        final_result = None
+        
+        async for event_str in evaluate_submission_stream(
+            problem_data=problem_data,
+            diagram_data=diagram_data
+        ):
+            yield event_str
+            
+            # Capture final result from 'done' event
+            if '"type": "done"' in event_str:
+                try:
+                    event_data = _json.loads(event_str.replace("data: ", "").strip())
+                    final_result = event_data.get("data")
+                except Exception:
+                    pass
+        
+        # After streaming completes, save submission to database
+        if final_result:
+            try:
+                submissions_collection = db.get_collection("submissions")
+                submission_doc = {
+                    "user_id": current_user.id,
+                    "problem_id": session["problem_id"],
+                    "session_id": session_id,
+                    "diagram_data": diagram_data,
+                    "score": final_result["score"],
+                    "max_score": final_result["max_score"],
+                    "breakdown": final_result["breakdown"],
+                    "feedback": final_result["feedback"],
+                    "tips": final_result["tips"],
+                    "resources": final_result["resources"],
+                    "time_spent": session.get("time_spent", 0),
+                    "status": "completed",
+                    "submitted_at": datetime.utcnow(),
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+                await submissions_collection.insert_one(submission_doc)
+                await session_crud.mark_session_submitted(session_id, current_user.id)
+            except Exception as e:
+                print(f"Error saving submission after stream: {e}")
+    
+    return StreamingResponse(
+        stream_and_save(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive"
+        }
+    )
 
 @router.get("/problem/{problem_id}/submissions")
 async def get_problem_submissions(

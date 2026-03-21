@@ -1,4 +1,4 @@
-import { Home, List, TrendingUp, Settings, LogOut, ChevronLeft, ChevronRight } from "lucide-react";
+import { Home, List, TrendingUp, Settings, LogOut, ChevronLeft, ChevronRight, Compass } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -6,6 +6,7 @@ import { useSidebar } from "@/contexts/SidebarContext";
 import { authService } from "@/services/authService";
 import { useEffect, useState } from "react";
 import type { User } from "@/types/api";
+import { Logo } from "@/components/Logo";
 
 export const AppSidebar = () => {
   const navigate = useNavigate();
@@ -27,6 +28,7 @@ export const AppSidebar = () => {
 
   const navItems = [
     { title: "Dashboard", url: "/dashboard", icon: Home },
+    { title: "Explore", url: "/explore", icon: Compass },
     { title: "All Questions", url: "/questions", icon: List },
     { title: "My Progress", url: "/progress", icon: TrendingUp },
     { title: "Settings", url: "/settings", icon: Settings },
@@ -47,10 +49,15 @@ export const AppSidebar = () => {
         "border-b border-sidebar-border flex items-center justify-between",
         isCollapsed ? "p-4" : "p-6"
       )}>
-        {!isCollapsed && (
-          <div>
-            <h1 className="text-xl font-bold text-primary">SystemDesign.io</h1>
-            <p className="text-xs text-muted-foreground mt-1">Master system design</p>
+        {isCollapsed ? (
+          <Logo size={28} className="text-primary" />
+        ) : (
+          <div className="flex items-center gap-3">
+            <Logo size={32} className="text-primary" />
+            <div>
+              <h1 className="text-xl font-bold text-primary">SystemDesign.io</h1>
+              <p className="text-xs text-muted-foreground mt-1">Master system design</p>
+            </div>
           </div>
         )}
         <button

@@ -18,20 +18,12 @@ async def create_submission(
         "problem_id": problem_id,
         "diagram_data": diagram_data,
         "score": 0,
-        "max_score": 100,
         "time_spent": 0,
         "status": status,
         "feedback": {
-            "implemented": [],
-            "missing": [],
-            "next_steps": [],
-            "summary": ""
-        },
-        "breakdown": [],
-        "tips": [],
-        "resources": {
-            "videos": [],
-            "documents": []
+            "strengths": [],
+            "improvements": [],
+            "missing_components": []
         },
         "chat_messages": [],
         "submitted_at": datetime.utcnow(),

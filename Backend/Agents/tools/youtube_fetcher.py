@@ -42,16 +42,9 @@ async def fetch_youtube_videos(
         print("To enable YouTube video recommendations, set YOUTUBE_API_KEY in your .env file")
         return []
     
-    # Build search query from problem data
+    # Build focused search query
     problem_title = problem_data.get("title", "System Design")
-    categories = problem_data.get("categories", [])
-    
-    query_parts = [problem_title]
-    if categories:
-        query_parts.append(categories[0])
-    query_parts.append("system design tutorial")
-    
-    query = " ".join(query_parts)
+    query = f"System design of {problem_title}"
     
     # Make API request
     try:

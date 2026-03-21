@@ -4,6 +4,7 @@ langchain
 langchain-core
 langchain-openai
 langchain-community
+langgraph
 motor
 pymongo
 dnspython
