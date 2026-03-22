@@ -1,13 +1,13 @@
 """
 Tips Generator Tool
-Generates personalized, actionable tips using gpt-4o-mini LLM.
-Requires OPENAI_API_KEY environment variable.
+Generates personalized, actionable tips using LLM.
+Uses centralized LLM provider (GitHub Copilot API).
 """
 from typing import List, Dict, Any
-import os
 import json
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+
+from core.llm_provider import get_llm
 
 
 async def generate_tips(
@@ -16,7 +16,7 @@ async def generate_tips(
     diagram_str: str
 ) -> List[str]:
     """
-    Use gpt-4o-mini LLM to generate personalized, actionable tips.
+    Use LLM to generate personalized, actionable tips.
     
     Args:
         problem_data: Problem info with title, requirements, etc.
@@ -26,15 +26,8 @@ async def generate_tips(
     Returns:
         List of 4-6 actionable tips, empty list if LLM unavailable
     """
-    # Check for API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("WARNING: OPENAI_API_KEY not configured - cannot generate personalized tips")
-        return []
-    
     try:
-        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm = ChatOpenAI(model=model_name, temperature=0.7, api_key=api_key)
+        llm = get_llm(temperature=0.7)
         
         system_prompt = """You are a system design mentor. Generate 4-6 specific, actionable tips to improve the solution.
 

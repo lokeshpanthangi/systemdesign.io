@@ -9,10 +9,10 @@ Orchestrates the submission evaluation with SSE streaming:
 import json
 import asyncio
 from typing import Dict, Any, AsyncGenerator
-from .tools.scoring import score_solution
-from .tools.tips_generator import generate_tips
-from .tools.youtube_fetcher import fetch_youtube_videos
-from .tools.docs_fetcher import fetch_documentation
+from Agents.submit_agent.tools.scoring import score_solution
+from Agents.submit_agent.tools.tips_generator import generate_tips
+from Agents.submit_agent.tools.docs_fetcher import fetch_documentation
+from Agents.submit_agent.tools.youtube_fetcher import fetch_youtube_videos
 
 
 def extract_diagram_summary(diagram_data: Dict[str, Any]) -> str:
@@ -72,15 +72,6 @@ async def evaluate_submission_stream(
     """
     Streaming version of evaluate_submission.
     Yields SSE-formatted JSON events as each step completes.
-    
-    Events:
-      {"type": "status", "step": "scoring"} - Step started
-      {"type": "score_result", "data": {...}} - Scoring complete
-      {"type": "status", "step": "tips"} - Tips generation started
-      {"type": "tips_result", "data": [...]} - Tips complete
-      {"type": "status", "step": "resources"} - Resource fetch started
-      {"type": "resources_result", "data": {...}} - Resources complete
-      {"type": "done", "data": {...}} - Full result
     """
     diagram_str = extract_diagram_summary(diagram_data)
     

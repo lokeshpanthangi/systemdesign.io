@@ -18,6 +18,7 @@ import QuestionDetail from "./pages/QuestionDetail";
 import Practice from "./pages/Practice";
 import Results from "./pages/Results";
 import NotFound from "./pages/NotFound";
+import Admin from "./pages/Admin";
 
 const queryClient = new QueryClient();
 
@@ -40,6 +41,7 @@ const App = () => (
                 <Route path="/questions/:id" element={<ProtectedRoute><QuestionDetail /></ProtectedRoute>} />
                 <Route path="/practice/:id" element={<ProtectedRoute><Practice /></ProtectedRoute>} />
                 <Route path="/results" element={<ProtectedRoute><Results /></ProtectedRoute>} />
+                <Route path="/admin" element={<Admin />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>

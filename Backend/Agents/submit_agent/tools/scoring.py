@@ -1,13 +1,13 @@
 """
 Scoring Tool
-Evaluates user's system design solution using gpt-4o-mini LLM.
-Requires OPENAI_API_KEY environment variable.
+Evaluates user's system design solution using LLM.
+Uses centralized LLM provider (GitHub Copilot API).
 """
 from typing import Dict, Any
 import json
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-import os
+
+from core.llm_provider import get_llm
 
 
 async def score_solution(
@@ -16,7 +16,7 @@ async def score_solution(
     diagram_str: str
 ) -> Dict[str, Any]:
     """
-    Use gpt-4o-mini LLM to evaluate the system design solution.
+    Use LLM to evaluate the system design solution.
     
     Args:
         problem_data: Problem requirements and info
@@ -26,23 +26,6 @@ async def score_solution(
     Returns:
         Scoring result dict with score, breakdown, implemented, missing
     """
-    # Check for API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("ERROR: OPENAI_API_KEY not configured - cannot score submission")
-        return {
-            "score": 0,
-            "max_score": 100,
-            "breakdown": [{
-                "requirement": "LLM Evaluation",
-                "achieved": False,
-                "points": 0,
-                "note": "OpenAI API key not configured"
-            }],
-            "implemented": [],
-            "missing": ["Cannot evaluate - OpenAI API key required"]
-        }
-    
     # Check if diagram is empty
     elements = diagram_data.get("elements", [])
     if not elements:
@@ -60,8 +43,7 @@ async def score_solution(
         }
     
     try:
-        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm = ChatOpenAI(model=model_name, temperature=0.3, api_key=api_key)
+        llm = get_llm(temperature=0.3)
         
         system_prompt = """You are a system design evaluator. Score the student's diagram (0-100) against requirements.
 

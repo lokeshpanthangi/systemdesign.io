@@ -129,8 +129,7 @@ async def get_current_user(token_data: dict = Depends(verify_access_token)):
             detail="Invalid token payload"
         )
     
-    # Import here to avoid circular dependency
-    from models import User
+    from core.models import User
     
     # Return User object with email as id (for backwards compatibility with CRUD functions)
     return User(

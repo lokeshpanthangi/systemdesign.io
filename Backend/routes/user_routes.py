@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from CRUD.user_crud import create_user, authenticate_user, get_user_by_email
-from auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token
+from CRUD.user import create_user, authenticate_user, get_user_by_email
+from core.auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token
 
 user_router = APIRouter(prefix="/users", tags=["Users"])
 

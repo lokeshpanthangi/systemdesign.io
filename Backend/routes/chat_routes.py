@@ -17,13 +17,10 @@ from bson import ObjectId
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from Agents.chat_agent.graph import create_chat_agent_graph
-from Agents.chat_agent.tools import execute_get_page_context
-from Agents.tools.excalidraw_extractor import extract_excalidraw_components
-from Agents.prompts.chat_agent_prompt import CHAT_AGENT_SYSTEM_PROMPT
 
-from auth import get_current_user
-from models import User
-from database import db
+from core.auth import get_current_user
+from core.models import User
+from database.database import db
 
 
 chat = APIRouter(prefix="/sessions", tags=["AI Chat"])
@@ -98,9 +95,6 @@ async def chat_with_ai(
         collected_response = ""
         
         try:
-            # ── Phase 1: Stream the LLM response ──────────────────────────
-            # on_tool_start/on_tool_end do NOT fire for our custom tool_node,
-            # so we detect tool usage via on_chain_start for the "tools" node.
             async for event in graph.astream_events(
                 {"messages": langchain_messages},
                 version="v2"
@@ -120,7 +114,7 @@ async def chat_with_ai(
                     if node_name == "tools":
                         yield f"data: {json.dumps({'type': 'status', 'content': '🔍 Working on it...'})}\n\n"
             
-            # ── Phase 2: Stream diagram elements (after graph completes) ──
+            # Stream diagram elements (after graph completes)
             batches = getattr(graph, '_streamed_diagram_batches', [])
             if batches:
                 yield f"data: {json.dumps({'type': 'status', 'content': '🎨 Building your diagram...'})}\n\n"
@@ -141,7 +135,7 @@ async def chat_with_ai(
                     
                     await asyncio.sleep(0.12)
             
-            # ── Phase 3: Done ─────────────────────────────────────────────
+            # Done
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             
             if collected_response:

@@ -1,13 +1,13 @@
 """
 Documentation Fetcher Tool
 Fetches relevant documentation and article links for learning.
-Uses web search APIs or LLM suggestions.
+Uses centralized LLM provider (GitHub Copilot API).
 """
 from typing import List, Dict, Any
-import os
 import json
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+
+from core.llm_provider import get_llm
 
 try:
     import requests
@@ -31,12 +31,7 @@ async def fetch_docs_llm(
         List of doc recommendations
     """
     try:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return []
-
-        model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm = ChatOpenAI(model=model_name, temperature=0.7, api_key=api_key)
+        llm = get_llm(temperature=0.7)
 
         system_prompt = """You are a system design educator. Suggest 4-6 documentation sources.
 

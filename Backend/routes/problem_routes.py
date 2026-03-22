@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, List
-from CRUD.problem_crud import (
+from CRUD.problem import (
     create_problem,
     get_problem_by_id,
     get_all_problems,
@@ -10,7 +10,7 @@ from CRUD.problem_crud import (
     delete_problem,
     search_problems
 )
-from auth import verify_access_token
+from core.auth import verify_access_token
 
 problem_router = APIRouter(prefix="/problems", tags=["Problems"])
 

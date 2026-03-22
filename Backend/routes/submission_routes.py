@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional, List
-from CRUD.submission_crud import (
+from CRUD.submission import (
     create_submission,
     get_submission_by_id,
     get_submissions_by_user,
@@ -11,9 +11,8 @@ from CRUD.submission_crud import (
     add_chat_message,
     delete_submission
 )
-from CRUD.session_crud import get_session_by_id, mark_session_submitted
-import CRUD.problem_crud as problem_crud
-from auth import verify_access_token
+from core.auth import verify_access_token
+from features.submission_service import create_submission_from_session_logic
 
 submission_router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
@@ -68,9 +67,6 @@ class SubmissionResponse(BaseModel):
 # ---------- Helper Function ----------
 
 async def get_current_user_email(token_data: dict = Depends(verify_access_token)) -> str:
-    """
-    Extract and return the current user's email from the JWT token.
-    """
     email = token_data.get("sub")
     if not email:
         raise HTTPException(
@@ -87,9 +83,7 @@ async def create_new_submission(
     payload: SubmissionCreate,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Create a new submission. Requires authentication.
-    """
+    """Create a new submission. Requires authentication."""
     submission = await create_submission(
         user_id=current_user_email,
         problem_id=payload.problem_id,
@@ -126,70 +120,15 @@ async def create_submission_from_session(
     session_id: str,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Convert a practice session to a final submission for evaluation.
-    
-    - Fetches session data
-    - Creates submission with session's diagram_data, time_spent, and chat_messages
-    - Marks session as 'submitted'
-    - Returns the created submission for AI evaluation
-    """
-    # Get the session
-    session = await get_session_by_id(session_id)
-    
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found"
-        )
-    
-    # Verify ownership
-    if session["user_id"] != current_user_email:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to submit this session"
-        )
-    
-    # Check if session is already submitted
-    if session["status"] == "submitted":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Session already submitted"
-        )
-    
-    # Create submission from session data
-    submission = await create_submission(
-        user_id=session["user_id"],
-        problem_id=session["problem_id"],
-        diagram_data=session.get("diagram_data", {}),
-        status="completed"
-    )
-    
-    if not submission:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create submission"
-        )
-    
-    # Copy session data to submission
-    from datetime import datetime
-    from database import db
-    submissions_collection = db.get_collection("submissions")
-    
-    await submissions_collection.update_one(
-        {"_id": submission["_id"]},
-        {"$set": {
-            "time_spent": session.get("time_spent", 0),
-            "chat_messages": session.get("chat_messages", []),
-            "updated_at": datetime.utcnow()
-        }}
-    )
-    
-    # Mark session as submitted
-    await mark_session_submitted(session_id, current_user_email)
-    
-    # Fetch updated submission
-    updated_submission = await get_submission_by_id(str(submission["_id"]))
+    """Convert a practice session to a final submission."""
+    try:
+        updated_submission = await create_submission_from_session_logic(session_id, current_user_email)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     
     return {
         "message": "Submission created from session successfully",
@@ -214,23 +153,14 @@ async def get_submission(
     submission_id: str,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Get a specific submission by ID. User can only access their own submissions.
-    """
+    """Get a specific submission by ID."""
     submission = await get_submission_by_id(submission_id)
     
     if not submission:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
     
-    # Ensure user can only access their own submissions
     if submission["user_id"] != current_user_email:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to view this submission"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to view this submission")
 
     return {
         "id": submission["_id"],
@@ -253,9 +183,7 @@ async def get_my_submissions(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100)
 ):
-    """
-    Get all submissions by the authenticated user.
-    """
+    """Get all submissions by the authenticated user."""
     submissions = await get_submissions_by_user(current_user_email, skip=skip, limit=limit)
     
     return {
@@ -283,16 +211,11 @@ async def get_my_submission_for_problem(
     problem_id: str,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Get the authenticated user's submission for a specific problem.
-    """
+    """Get the authenticated user's submission for a specific problem."""
     submission = await get_user_submission_for_problem(current_user_email, problem_id)
     
     if not submission:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No submission found for this problem"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No submission found for this problem")
 
     return {
         "id": submission["_id"],
@@ -315,9 +238,7 @@ async def update_existing_submission(
     payload: SubmissionUpdate,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Update a submission. Only the owner can update.
-    """
+    """Update a submission. Only the owner can update."""
     updated_submission = await update_submission(
         submission_id=submission_id,
         diagram_data=payload.diagram_data,
@@ -329,16 +250,10 @@ async def update_existing_submission(
     )
 
     if not updated_submission:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
     
     if updated_submission.get("error") == "Unauthorized":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to update this submission"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to update this submission")
 
     return {
         "message": "Submission updated successfully",
@@ -364,9 +279,7 @@ async def add_message_to_chat(
     payload: ChatMessageRequest,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Add a chat message to a submission. Only the owner can add messages.
-    """
+    """Add a chat message to a submission."""
     updated_submission = await add_chat_message(
         submission_id=submission_id,
         role=payload.role,
@@ -375,16 +288,10 @@ async def add_message_to_chat(
     )
 
     if not updated_submission:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Submission not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
     
     if updated_submission.get("error") == "Unauthorized":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to update this submission"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to update this submission")
 
     return {
         "message": "Chat message added successfully",
@@ -400,9 +307,7 @@ async def delete_existing_submission(
     submission_id: str,
     current_user_email: str = Depends(get_current_user_email)
 ):
-    """
-    Delete a submission. Only the owner can delete.
-    """
+    """Delete a submission. Only the owner can delete."""
     deleted = await delete_submission(submission_id, current_user_email)
     
     if not deleted:

@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import hashlib
 import json
-from database import db
+from database.database import db
 
 sessions_collection = db.get_collection("sessions")
 
@@ -224,7 +224,6 @@ async def abandon_session(session_id: str, user_id: str) -> bool:
 async def cleanup_old_sessions(days: int = 7) -> int:
     """Clean up abandoned sessions older than X days"""
     cutoff_date = datetime.utcnow()
-    # Subtract days
     from datetime import timedelta
     cutoff_date = cutoff_date - timedelta(days=days)
     

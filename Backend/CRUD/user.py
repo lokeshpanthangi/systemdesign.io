@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from passlib.context import CryptContext
 from bson import ObjectId
-from database import db
+from database.database import db
 import bcrypt
 
 password_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")

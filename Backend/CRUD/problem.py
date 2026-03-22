@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 from bson import ObjectId
-from database import db
+from database.database import db
 
 
 async def create_problem(
