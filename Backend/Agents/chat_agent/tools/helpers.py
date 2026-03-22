@@ -44,35 +44,75 @@ CONTAINER_TITLE_HEIGHT = 50
 CANVAS_GAP_X = 100
 CANVAS_GAP_Y = 80
 
-# Default sizes when LLM doesn't specify
-DEFAULT_LEAF_W = 160
-DEFAULT_LEAF_H = 70
+# ════════════════════════════════════════════════════════════════════════════
+# MINIMUM SIZES - Enforce these to ensure readable diagrams
+# ════════════════════════════════════════════════════════════════════════════
+
+MIN_SIZES = {
+    "rectangle": {"width": 140, "height": 60},
+    "ellipse": {"width": 120, "height": 60},
+    "diamond": {"width": 100, "height": 80},
+    "container": {"width": 300, "height": 200},  # for nodes with children
+}
+
+# Minimum spacing between nodes
+MIN_NODE_GAP = 80
+
+# First node default position (avoid canvas edge cutoff)
+CANVAS_START_X = 200
+CANVAS_START_Y = 150
+
+
+def enforce_minimum_size(shape_type: str, width: int, height: int, is_container: bool = False) -> Tuple[int, int]:
+    """
+    Enforce minimum sizes for shapes to ensure readable diagrams.
+    Returns (width, height) with minimums applied.
+    """
+    key = "container" if is_container else shape_type
+    min_w = MIN_SIZES.get(key, MIN_SIZES["rectangle"])["width"]
+    min_h = MIN_SIZES.get(key, MIN_SIZES["rectangle"])["height"]
+    return max(width, min_w), max(height, min_h)
 
 
 # ─── Text-Based Auto-Sizing ──────────────────────────────────────────────────
 
-def calculate_text_size(label: str, width: Optional[int] = None, height: Optional[int] = None) -> Tuple[int, int]:
+def calculate_text_size(
+    label: str,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    shape_type: str = "rectangle",
+    is_container: bool = False
+) -> Tuple[int, int]:
     """
     Return (width, height) for a node.
-    Uses LLM-provided values if given, otherwise auto-sizes from label.
+    Enforces minimum sizes and uses LLM-provided values when given.
     """
+    # Get minimum sizes
+    min_w, min_h = enforce_minimum_size(shape_type, 0, 0, is_container)
+
     if width and height:
-        return int(width), int(height)
+        # Both provided - enforce minimums
+        return max(int(width), min_w), max(int(height), min_h)
+
     if width:
-        return int(width), DEFAULT_LEAF_H
+        # Width provided, calculate height from label
+        w = max(int(width), min_w)
+        h = max(min_h, 60)  # Default reasonable height
+        return w, h
+
     if height:
+        # Height provided, calculate width from label
         char_width = 10
         padding_x = 50
-        min_width = 140
-        w = max(min_width, len(label) * char_width + padding_x)
-        return w, int(height)
+        w = max(min_w, len(label) * char_width + padding_x)
+        return w, max(int(height), min_h)
 
-    # Fully auto
+    # Fully auto - calculate from label
     char_width = 10
     padding_x = 50
-    min_width = 140
-    w = max(min_width, len(label) * char_width + padding_x)
-    return w, DEFAULT_LEAF_H
+    w = max(min_w, len(label) * char_width + padding_x)
+    h = max(min_h, 60)
+    return w, h
 
 
 # ─── Element Map Builder ─────────────────────────────────────────────────────
@@ -174,7 +214,9 @@ def layout_children_inside(
 def extract_diagram_context(diagram_data: dict) -> str:
     """
     Format existing diagram elements for the LLM.
-    Shows: id, label, shape, size=WxH, and parent/children relationships.
+    Shows: id, label, shape, size WxH, center position (cx, cy), parent/children, colors.
+    The LLM should use these cx/cy values to understand layout and pass its own
+    cx/cy when creating new nodes.
     """
     if not diagram_data or not isinstance(diagram_data, dict):
         return "No diagram data provided"
@@ -250,16 +292,28 @@ def extract_diagram_context(diagram_data: dict) -> str:
     lines.append("=== EXISTING DIAGRAM ===")
     lines.append(f"Components: {len(components)}, Connections: {len(arrows)}")
     lines.append("")
+    lines.append("COORDINATE SYSTEM: cx/cy are the CENTER point of each element.")
+    lines.append("When creating new nodes pass \"x\" and \"y\" as the desired CENTER point.")
+    lines.append("")
 
     if components:
-        lines.append("=== NODES (use these IDs in edges or as parent references) ===")
+        lines.append("=== NODES ===")
         for comp in components:
             cid = comp["id"]
             ctype = comp.get("type", "rectangle")
             label = shape_labels.get(cid, "(no label)")
             w = int(comp.get("width", 0))
             h = int(comp.get("height", 0))
-            line = f'- id="{cid}"  label="{label}"  shape={ctype}  size={w}x{h}'
+            # Center point
+            cx = int(comp.get("x", 0) + w / 2)
+            cy = int(comp.get("y", 0) + h / 2)
+            bg   = comp.get("backgroundColor", "transparent")
+            stroke = comp.get("strokeColor", "#1e1e1e")
+            line = f'- id="{cid}"  label="{label}"  shape={ctype}  size={w}x{h}  center=({cx},{cy})'
+            if bg not in ("transparent", None, ""):
+                line += f'  bg={bg}'
+            if stroke not in ("#1e1e1e", None, ""):
+                line += f'  stroke={stroke}'
             if cid in parent_of:
                 parent_label = shape_labels.get(parent_of[cid], parent_of[cid])
                 line += f'  parent="{parent_label}"'
@@ -272,6 +326,7 @@ def extract_diagram_context(diagram_data: dict) -> str:
     if arrows:
         lines.append("=== EDGES ===")
         for arrow in arrows:
+            aid = arrow.get("id", "?")
             start_id = (arrow.get("startBinding") or {}).get("elementId", "?")
             end_id = (arrow.get("endBinding") or {}).get("elementId", "?")
             start_label = shape_labels.get(start_id, "?")
@@ -281,9 +336,12 @@ def extract_diagram_context(diagram_data: dict) -> str:
                 if isinstance(b, dict) and b.get("type") == "text":
                     text_elem = id_to_elem.get(b.get("id", ""), {})
                     arrow_label = (text_elem.get("text") or "").strip()
-            conn = f'- "{start_label}" ({start_id}) → "{end_label}" ({end_id})'
+            stroke = arrow.get("strokeColor", "")
+            conn = f'- id="{aid}"  "{start_label}" ({start_id}) → "{end_label}" ({end_id})'
             if arrow_label:
-                conn += f'  [{arrow_label}]'
+                conn += f'  label=[{arrow_label}]'
+            if stroke and stroke not in ("#1e1e1e", None, ""):
+                conn += f'  stroke={stroke}'
             lines.append(conn)
         lines.append("")
 
@@ -618,8 +676,12 @@ def build_diagram_streaming(
     No groupIds — container and children are independent elements.
     """
     existing_elements = existing_elements or []
-    nodes = description.get("nodes", {})
-    edges = description.get("edges", [])
+    nodes = description.get("nodes") or {}
+    edges = description.get("edges") or []
+    if not isinstance(nodes, dict):
+        nodes = {}
+    if not isinstance(edges, list):
+        edges = []
 
     id_to_elem, id_to_pos, existing_ids = build_element_maps(existing_elements)
 
@@ -630,16 +692,29 @@ def build_diagram_streaming(
     new_shape_map: Dict[str, Dict] = {}
     existing_updates: Dict[str, Dict] = {}
 
+    # Sanitize nodes: ensure all values are dicts (LLMs sometimes output null or strings)
+    sane_nodes = {nid: nd for nid, nd in nodes.items() if isinstance(nd, dict)}
+
     # ── PASS 1: Figure out which nodes are children ─────────────────────────
     children_claimed: Set[str] = set()
-    for node_id, node_def in nodes.items():
+    for node_id, node_def in sane_nodes.items():
         for child_id in node_def.get("children", []):
             children_claimed.add(child_id)
 
-    # PASS 1a: Lay out containers + their children
+    # PASS 1-GRID: If nodes have row/col, resolve them to pixel positions first
+    layout_mode = description.get("layout", "")
+    direction   = description.get("direction", "top-bottom")
+    has_grid = any("row" in nd or "col" in nd for nd in sane_nodes.values())
+    if layout_mode == "grid" or has_grid:
+        grid_positions = resolve_grid_positions(sane_nodes, id_to_pos, direction)
+        for nid, pos in grid_positions.items():
+            if nid not in existing_ids:
+                all_positions[nid] = pos
+                all_pos_list.append(pos)
+
     container_positions: Dict[str, Tuple[float, float, int, int]] = {}
 
-    for node_id, node_def in nodes.items():
+    for node_id, node_def in sane_nodes.items():
         children = node_def.get("children", [])
         if not children:
             continue  # Not a container — handled below
@@ -652,11 +727,15 @@ def build_diagram_streaming(
         if shape_type not in SHAPE_CREATORS:
             shape_type = "rectangle"
 
-        # Use LLM-provided size for container
-        w, h = calculate_text_size(label, node_def.get("width"), node_def.get("height"))
+        # Use LLM-provided size for container, enforce minimums
+        w, h = calculate_text_size(label, node_def.get("width"), node_def.get("height"), shape_type, is_container=True)
 
-        # Place container on canvas
-        x, y = find_canvas_position(all_pos_list, w, h)
+        # Get position from LLM or auto-place
+        if "x" in node_def and "y" in node_def:
+            x = float(node_def["x"]) - w / 2
+            y = float(node_def["y"]) - h / 2
+        else:
+            x, y = find_canvas_position(all_pos_list, w, h)
 
         all_positions[node_id] = (x, y, w, h)
         all_pos_list.append((x, y, w, h))
@@ -669,21 +748,23 @@ def build_diagram_streaming(
                 continue
             child_def = nodes[child_id]
             child_label = child_def.get("label", "Component")
-            cw, ch = calculate_text_size(child_label, child_def.get("width"), child_def.get("height"))
+            child_shape = child_def.get("shape", "rectangle").lower()
+            cw, ch = calculate_text_size(child_label, child_def.get("width"), child_def.get("height"), child_shape)
             children_sizes.append((child_id, cw, ch))
 
         child_xy = layout_children_inside(x, y, w, h, children_sizes)
 
         for child_id, cx_y in child_xy.items():
-            child_def = nodes[child_id]
+            child_def = sane_nodes[child_id]
             child_label = child_def.get("label", "Component")
-            cw, ch = calculate_text_size(child_label, child_def.get("width"), child_def.get("height"))
+            child_shape = child_def.get("shape", "rectangle").lower()
+            cw, ch = calculate_text_size(child_label, child_def.get("width"), child_def.get("height"), child_shape)
             cx, cy = cx_y
             all_positions[child_id] = (cx, cy, cw, ch)
             all_pos_list.append((cx, cy, cw, ch))
 
     # PASS 1b: Lay out free (non-child) leaf nodes on canvas
-    for node_id, node_def in nodes.items():
+    for node_id, node_def in sane_nodes.items():
         if node_id in children_claimed:
             continue
         if node_id in container_positions:
@@ -694,19 +775,29 @@ def build_diagram_streaming(
             continue
 
         label = node_def.get("label", "Component")
-        w, h = calculate_text_size(label, node_def.get("width"), node_def.get("height"))
-        x, y = find_canvas_position(all_pos_list, w, h)
+        shape_type = node_def.get("shape", "rectangle").lower()
+        if shape_type not in SHAPE_CREATORS:
+            shape_type = "rectangle"
+        w, h = calculate_text_size(label, node_def.get("width"), node_def.get("height"), shape_type)
+
+        # If LLM provides x/y, treat as CENTER point and convert to top-left
+        if "x" in node_def and "y" in node_def:
+            x = float(node_def["x"]) - w / 2
+            y = float(node_def["y"]) - h / 2
+        else:
+            x, y = find_canvas_position(all_pos_list, w, h)
+
         all_positions[node_id] = (x, y, w, h)
         all_pos_list.append((x, y, w, h))
 
     # ── PASS 2: Yield elements in render order ───────────────────────────────
-    render_order = _resolve_node_order(nodes)
+    render_order = _resolve_node_order(sane_nodes)
 
     for node_id in render_order:
-        if node_id not in nodes:
+        if node_id not in sane_nodes:
             continue
 
-        node_def = nodes[node_id]
+        node_def = sane_nodes[node_id]
         label = node_def.get("label", "Component")
         shape_type = node_def.get("shape", "rectangle").lower()
         if shape_type not in SHAPE_CREATORS:
@@ -807,3 +898,464 @@ def build_diagram_streaming(
             if eid in existing_updates:
                 batch.append(existing_updates[eid])
         yield batch
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  DELETE NODES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def delete_elements_from_diagram(
+    node_ids: List[str],
+    existing_elements: List[Dict],
+) -> Tuple[List[Dict], int]:
+    """
+    Mark shapes, their bound text labels, and connected arrows as isDeleted.
+
+    Returns:
+        (deleted_batch, count_deleted)
+        deleted_batch: list of element dicts with isDeleted=True to send to canvas
+        count_deleted: number of primary elements (shapes) deleted
+    """
+    ids_to_delete: Set[str] = set(node_ids)
+    deleted_batch: List[Dict] = []
+    count = 0
+
+    # Pass 1: collect text element IDs bound to the shapes being deleted
+    # and collect arrow IDs that start/end at deleted nodes
+    bound_text_ids: Set[str] = set()
+    arrow_ids_to_delete: Set[str] = set()
+
+    for elem in existing_elements:
+        if not isinstance(elem, dict):
+            continue
+
+        eid = elem.get("id", "")
+
+        # Text bound to a deleted shape
+        if elem.get("type") == "text" and elem.get("containerId") in ids_to_delete:
+            bound_text_ids.add(eid)
+
+        # Arrows that connect to deleted nodes
+        if elem.get("type") == "arrow":
+            start = (elem.get("startBinding") or {}).get("elementId", "")
+            end = (elem.get("endBinding") or {}).get("elementId", "")
+            if start in ids_to_delete or end in ids_to_delete:
+                arrow_ids_to_delete.add(eid)
+                # Also grab the arrow's bound text label
+                for b in (elem.get("boundElements") or []):
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        bound_text_ids.add(b.get("id", ""))
+
+    # Pass 2: build the deletion batch
+    all_to_delete = ids_to_delete | bound_text_ids | arrow_ids_to_delete
+
+    for elem in existing_elements:
+        if not isinstance(elem, dict):
+            continue
+        eid = elem.get("id", "")
+        if eid not in all_to_delete:
+            continue
+
+        deleted = copy.deepcopy(elem)
+        deleted["isDeleted"] = True
+        deleted["version"] = deleted.get("version", 1) + 1
+        deleted["versionNonce"] = _generate_seed(eid + "del")
+        deleted_batch.append(deleted)
+
+        if eid in ids_to_delete:
+            count += 1
+
+    return deleted_batch, count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GRID LAYOUT RESOLVER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Gap between grid cells
+GRID_GAP_X = 100
+GRID_GAP_Y = 80
+
+# Starting canvas position for grid origin (0, 0)
+GRID_ORIGIN_X = 100.0
+GRID_ORIGIN_Y = 100.0
+
+
+def resolve_grid_positions(
+    nodes: Dict[str, dict],
+    existing_positions: Dict[str, Tuple[float, float, float, float]],
+    direction: str = "top-bottom",
+) -> Dict[str, Tuple[float, float, int, int]]:
+    """
+    Convert row/col grid coordinates to pixel (x, y, w, h) for each node.
+    Row → Y axis, Col → X axis (top-to-bottom flow).
+    Returns {node_id: (x, y, w, h)} only for nodes with row/col defined.
+    """
+    node_sizes: Dict[str, Tuple[int, int]] = {}
+    for nid, node_def in nodes.items():
+        if "row" not in node_def and "col" not in node_def:
+            continue
+        label = node_def.get("label", "")
+        w, h = calculate_text_size(label, node_def.get("width"), node_def.get("height"))
+        node_sizes[nid] = (w, h)
+
+    if not node_sizes:
+        return {}
+
+    max_row = max(nodes[nid].get("row", 0) for nid in node_sizes)
+    max_col = max(nodes[nid].get("col", 0) for nid in node_sizes)
+
+    row_heights: Dict[int, int] = {r: 0 for r in range(max_row + 1)}
+    col_widths: Dict[int, int] = {c: 0 for c in range(max_col + 1)}
+
+    for nid, (w, h) in node_sizes.items():
+        row = nodes[nid].get("row", 0)
+        col = nodes[nid].get("col", 0)
+        row_heights[row] = max(row_heights[row], h)
+        col_widths[col] = max(col_widths[col], w)
+
+    if existing_positions:
+        max_existing_x = max(x + w for (x, _, w, _) in existing_positions.values())
+        origin_x = max_existing_x + GRID_GAP_X
+    else:
+        origin_x = GRID_ORIGIN_X
+    origin_y = GRID_ORIGIN_Y
+
+    col_x: Dict[int, float] = {}
+    acc = origin_x
+    for c in range(max_col + 1):
+        col_x[c] = acc
+        acc += col_widths[c] + GRID_GAP_X
+
+    row_y: Dict[int, float] = {}
+    acc = origin_y
+    for r in range(max_row + 1):
+        row_y[r] = acc
+        acc += row_heights[r] + GRID_GAP_Y
+
+    result: Dict[str, Tuple[float, float, int, int]] = {}
+    for nid, (w, h) in node_sizes.items():
+        row = nodes[nid].get("row", 0)
+        col = nodes[nid].get("col", 0)
+
+        x = col_x[col]
+        y = row_y[row]
+        cell_w = col_widths[col]
+        cell_h = row_heights[row]
+        cx = x + (cell_w - w) / 2
+        cy = y + (cell_h - h) / 2
+
+        result[nid] = (cx, cy, w, h)
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  UPDATE STYLE & POSITION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def update_style_elements(
+    updates: List[Dict],
+    existing_elements: List[Dict],
+) -> Tuple[List[Dict], int]:
+    """
+    Apply style/position changes to existing elements by ID.
+
+    Each update dict:
+      {
+        "id": "element_id",
+        "x": 150,                    # optional — new center X position
+        "y": 200,                    # optional — new center Y position
+        "backgroundColor": "#hex",   # optional
+        "strokeColor": "#hex",       # optional — applies to shapes AND arrows
+        "textColor": "#hex",         # optional — applied to the bound text element
+      }
+
+    Returns (updated_batch, count_updated).
+    """
+    update_map: Dict[str, Dict] = {}
+    for u in updates:
+        uid = u.get("id")
+        if uid:
+            update_map[uid] = u
+
+    if not update_map:
+        return [], 0
+
+    # Build a map of containerId → text element so we can update textColor
+    container_to_text: Dict[str, str] = {}
+    for elem in existing_elements:
+        if isinstance(elem, dict) and elem.get("type") == "text":
+            cid = elem.get("containerId")
+            if cid:
+                container_to_text[cid] = elem["id"]
+
+    updated_batch: List[Dict] = []
+    count = 0
+    text_ids_to_update: Dict[str, str] = {}  # text_id → textColor
+
+    for elem in existing_elements:
+        if not isinstance(elem, dict):
+            continue
+        eid = elem.get("id", "")
+        if eid not in update_map:
+            continue
+
+        u = update_map[eid]
+        updated = copy.deepcopy(elem)
+        changed = False
+
+        # Position updates (x, y are center coords)
+        if "x" in u or "y" in u:
+            w = elem.get("width", 160)
+            h = elem.get("height", 70)
+            new_x = u.get("x", elem.get("x", 0) + w / 2) - w / 2 if "x" in u else elem.get("x", 0)
+            new_y = u.get("y", elem.get("y", 0) + h / 2) - h / 2 if "y" in u else elem.get("y", 0)
+            updated["x"] = new_x
+            updated["y"] = new_y
+            changed = True
+
+        if "backgroundColor" in u and u["backgroundColor"]:
+            updated["backgroundColor"] = u["backgroundColor"]
+            changed = True
+        if "strokeColor" in u and u["strokeColor"]:
+            updated["strokeColor"] = u["strokeColor"]
+            changed = True
+
+        # Queue text color update for the bound text element
+        if "textColor" in u and u["textColor"] and eid in container_to_text:
+            text_ids_to_update[container_to_text[eid]] = u["textColor"]
+
+        if changed:
+            updated["version"] = updated.get("version", 1) + 1
+            updated["versionNonce"] = _generate_seed(eid + "style")
+            updated_batch.append(updated)
+            count += 1
+
+    # Apply text color changes
+    for elem in existing_elements:
+        if not isinstance(elem, dict):
+            continue
+        eid = elem.get("id", "")
+        if eid not in text_ids_to_update:
+            continue
+        updated = copy.deepcopy(elem)
+        updated["strokeColor"] = text_ids_to_update[eid]  # Excalidraw uses strokeColor for text color
+        updated["version"] = updated.get("version", 1) + 1
+        updated["versionNonce"] = _generate_seed(eid + "textcol")
+        updated_batch.append(updated)
+
+    return updated_batch, count
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  EDIT EDGES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def edit_edges_elements(
+    edits: List[Dict],
+    existing_elements: List[Dict],
+) -> Tuple[List[Dict], int]:
+    """
+    Edit or delete existing edges (arrows) by ID.
+
+    Each edit dict:
+      {
+        "id": "arrow_id",           # required
+        "action": "delete"|"edit",  # required
+        # For edit action, optional fields:
+        "from": "new_source_id",    # change source node
+        "to": "new_target_id",      # change target node
+        "label": "new label",       # change arrow label
+        "strokeColor": "#hex",      # change color
+        "direction": "one-way"|"two-way"
+      }
+
+    Returns (updated_batch, count_updated).
+    """
+    edit_map: Dict[str, Dict] = {}
+    for e in edits:
+        eid = e.get("id")
+        if eid:
+            edit_map[eid] = e
+
+    if not edit_map:
+        return [], 0
+
+    # Build lookup maps
+    id_to_elem: Dict[str, Dict] = {}
+    id_to_pos: Dict[str, Tuple[float, float, float, float]] = {}
+    arrow_to_text: Dict[str, str] = {}  # arrow_id -> bound text id
+    text_to_arrow: Dict[str, str] = {}   # text_id -> arrow_id
+
+    for elem in existing_elements:
+        if not isinstance(elem, dict) or not elem.get("id"):
+            continue
+        eid = elem["id"]
+        id_to_elem[eid] = elem
+
+        if elem.get("type") == "arrow":
+            w = elem.get("width", 0)
+            h = elem.get("height", 0)
+            id_to_pos[eid] = (elem.get("x", 0), elem.get("y", 0), abs(w), abs(h))
+            # Find bound text
+            for b in (elem.get("boundElements") or []):
+                if isinstance(b, dict) and b.get("type") == "text":
+                    arrow_to_text[eid] = b.get("id", "")
+        elif elem.get("type") == "text":
+            cid = elem.get("containerId")
+            if cid:
+                text_to_arrow[eid] = cid
+
+    # Also get shape positions for re-routing arrows
+    for elem in existing_elements:
+        if isinstance(elem, dict) and elem.get("type") in ("rectangle", "ellipse", "diamond"):
+            eid = elem["id"]
+            id_to_pos[eid] = (
+                elem.get("x", 0), elem.get("y", 0),
+                elem.get("width", 200), elem.get("height", 80),
+            )
+
+    updated_batch: List[Dict] = []
+    deleted_batch: List[Dict] = []
+    count = 0
+
+    for arrow_id, edit in edit_map.items():
+        if arrow_id not in id_to_elem:
+            continue
+
+        action = edit.get("action", "edit")
+        arrow = id_to_elem[arrow_id]
+
+        if action == "delete":
+            # Mark arrow as deleted
+            deleted = copy.deepcopy(arrow)
+            deleted["isDeleted"] = True
+            deleted["version"] = deleted.get("version", 1) + 1
+            deleted["versionNonce"] = _generate_seed(arrow_id + "del")
+            deleted_batch.append(deleted)
+            count += 1
+
+            # Also delete bound text label if exists
+            if arrow_id in arrow_to_text:
+                text_id = arrow_to_text[arrow_id]
+                text_elem = id_to_elem.get(text_id)
+                if text_elem:
+                    deleted_text = copy.deepcopy(text_elem)
+                    deleted_text["isDeleted"] = True
+                    deleted_text["version"] = deleted_text.get("version", 1) + 1
+                    deleted_text["versionNonce"] = _generate_seed(text_id + "del")
+                    deleted_batch.append(deleted_text)
+            continue
+
+        # Edit action
+        updated = copy.deepcopy(arrow)
+        changed = False
+
+        # Color change
+        if "strokeColor" in edit and edit["strokeColor"]:
+            updated["strokeColor"] = edit["strokeColor"]
+            changed = True
+
+        # Direction change
+        if "direction" in edit:
+            direction = edit["direction"]
+            if direction == "two-way":
+                updated["startArrowhead"] = "arrow"
+            else:
+                updated["startArrowhead"] = None
+            changed = True
+
+        # Label change
+        if "label" in edit:
+            new_label = edit["label"]
+            text_id = arrow_to_text.get(arrow_id)
+            if new_label and not text_id:
+                # Need to create a new text label
+                tid = _generate_id()
+                sx, sy = arrow.get("x", 0), arrow.get("y", 0)
+                w, h = arrow.get("width", 0), arrow.get("height", 0)
+                mid_x = sx + w / 2
+                mid_y = sy + h / 2
+                stroke = arrow.get("strokeColor", "#1e1e1e")
+                updated["boundElements"] = [{"id": tid, "type": "text"}]
+                text_elem = {
+                    "id": tid, "type": "text",
+                    "x": mid_x - 40, "y": mid_y - 12,
+                    "width": 80, "height": 20,
+                    "angle": 0,
+                    "strokeColor": stroke,
+                    "backgroundColor": "transparent",
+                    "fillStyle": "solid", "strokeWidth": 1,
+                    "strokeStyle": "solid", "roughness": 1, "opacity": 100,
+                    "groupIds": [], "frameId": None, "index": None, "roundness": None,
+                    "seed": _generate_seed(tid), "version": 1, "versionNonce": _generate_seed(tid + "v"),
+                    "isDeleted": False, "boundElements": None, "updated": 1,
+                    "link": None, "locked": False,
+                    "text": new_label, "fontSize": 13, "fontFamily": 1,
+                    "textAlign": "center", "verticalAlign": "middle",
+                    "containerId": arrow_id,
+                    "originalText": new_label, "autoResize": True, "lineHeight": 1.25,
+                }
+                updated_batch.append(text_elem)
+                changed = True
+            elif text_id:
+                text_elem = id_to_elem.get(text_id)
+                if text_elem:
+                    text_update = copy.deepcopy(text_elem)
+                    if new_label:
+                        text_update["text"] = new_label
+                        text_update["originalText"] = new_label
+                    else:
+                        # Empty label = delete text
+                        text_update["isDeleted"] = True
+                    text_update["version"] = text_update.get("version", 1) + 1
+                    text_update["versionNonce"] = _generate_seed(text_id + "edit")
+                    updated_batch.append(text_update)
+
+        # Re-route: change from/to
+        if ("from" in edit or "to" in edit) and arrow.get("type") == "arrow":
+            new_from = edit.get("from", (arrow.get("startBinding") or {}).get("elementId", ""))
+            new_to = edit.get("to", (arrow.get("endBinding") or {}).get("elementId", ""))
+
+            from_pos = id_to_pos.get(new_from)
+            to_pos = id_to_pos.get(new_to)
+
+            if from_pos and to_pos:
+                fx, fy, fw, fh = from_pos
+                tx, ty, tw, th = to_pos
+
+                # Calculate new arrow points
+                dx = tx - fx
+                dy = ty - fy
+                if abs(dy) > abs(dx):
+                    if dy > 0:
+                        sx, sy = fx + fw / 2, fy + fh
+                        ex, ey = tx + tw / 2, ty
+                    else:
+                        sx, sy = fx + fw / 2, fy
+                        ex, ey = tx + tw / 2, ty + th
+                else:
+                    if dx > 0:
+                        sx, sy = fx + fw, fy + fh / 2
+                        ex, ey = tx, ty + th / 2
+                    else:
+                        sx, sy = fx, fy + fh / 2
+                        ex, ey = tx + tw, ty + th / 2
+
+                updated["x"] = sx
+                updated["y"] = sy
+                updated["width"] = ex - sx
+                updated["height"] = ey - sy
+                updated["points"] = [[0, 0], [ex - sx, ey - sy]]
+                updated["startBinding"] = {"elementId": new_from, "focus": 0, "gap": 5, "fixedPoint": None}
+                updated["endBinding"] = {"elementId": new_to, "focus": 0, "gap": 5, "fixedPoint": None}
+                changed = True
+
+        if changed:
+            updated["version"] = updated.get("version", 1) + 1
+            updated["versionNonce"] = _generate_seed(arrow_id + "edit")
+            updated_batch.append(updated)
+            count += 1
+
+    return deleted_batch + updated_batch, count

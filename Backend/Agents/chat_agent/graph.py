@@ -75,5 +75,9 @@ def create_chat_agent_graph(
     graph.add_edge("tools", "agent")
 
     compiled = graph.compile()
+    # recursion_limit = 25 → supports ~10 tool calls
+    # Each tool call = 2 graph steps (agent → tools → agent).
+    # 10 tool calls × 2 = 20 steps + 1 initial agent + 1 final = 22 max. 25 is a safe ceiling.
+    compiled.recursion_limit = 25
     compiled._streamed_diagram_batches = streamed_batches
     return compiled
