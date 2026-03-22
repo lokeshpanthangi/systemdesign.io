@@ -230,18 +230,25 @@ const AdminPanel = ({ adminPassword }: { adminPassword: string }) => {
 
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
+  const loadingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Fetch Status ──────────────────────────────────────────────────────
   const fetchStatus = useCallback(async () => {
     try {
       setStatusLoading(true);
       setStatusError('');
+      setLoadingElapsed(0);
+      // Track elapsed time so we can show a Render cold-start hint
+      loadingTimerRef.current = setInterval(() => setLoadingElapsed(e => e + 1), 1000);
       const data = await adminService.getLLMStatus();
       setStatus(data);
     } catch (err: any) {
       setStatusError(err.message || 'Failed to fetch status');
     } finally {
       setStatusLoading(false);
+      setLoadingElapsed(0);
+      if (loadingTimerRef.current) clearInterval(loadingTimerRef.current);
     }
   }, []);
 
@@ -347,7 +354,7 @@ const AdminPanel = ({ adminPassword }: { adminPassword: string }) => {
         } catch (err: any) {
           setAuthMessage(err.message);
         }
-      }, 5000);
+      }, 8000); // 8s — avoids GitHub device flow rate limiting
     } catch (err: any) {
       setAuthPhase('error');
       setAuthMessage(err.message || 'Failed to start authentication');
@@ -358,6 +365,7 @@ const AdminPanel = ({ adminPassword }: { adminPassword: string }) => {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
+      if (loadingTimerRef.current) clearInterval(loadingTimerRef.current);
     };
   }, []);
 
@@ -458,9 +466,19 @@ const AdminPanel = ({ adminPassword }: { adminPassword: string }) => {
             status ? getStatusBg(status.status) : 'bg-white/5 border-white/10'
           }`}>
             {statusLoading ? (
-              <div className="flex items-center gap-3">
-                <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                <span className="text-gray-400">Loading connection status...</span>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                  <span className="text-gray-400">Connecting to backend...</span>
+                  {loadingElapsed > 0 && (
+                    <span className="text-gray-600 text-sm font-mono">{loadingElapsed}s</span>
+                  )}
+                </div>
+                {loadingElapsed >= 5 && (
+                  <p className="text-xs text-amber-500/70 pl-8">
+                    Server is waking up (Render cold start) — usually takes 20–60s on first request.
+                  </p>
+                )}
               </div>
             ) : statusError ? (
               <div className="flex items-center gap-3">

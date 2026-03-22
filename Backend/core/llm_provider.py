@@ -16,6 +16,7 @@ Usage:
   status = get_llm_status()
 """
 
+import os
 import json
 import time
 import threading
