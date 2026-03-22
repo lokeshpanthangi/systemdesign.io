@@ -13,6 +13,7 @@ PyJWT
 passlib
 bcrypt
 requests
+httpx
 python-dotenv
 python-multipart
 email-validator
