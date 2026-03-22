@@ -26,6 +26,7 @@ from typing import Optional, Dict, Any
 from enum import Enum
 
 import requests as http_requests
+from langchain_openai import ChatOpenAI   # imported at module load — no lazy delay
 
 logger = logging.getLogger(__name__)
 
@@ -534,17 +535,17 @@ def get_llm(
     temperature: float = 0.3,
     streaming: bool = False,
     model: str = None,
-):
+) -> ChatOpenAI:
     """
     Get a ChatOpenAI instance configured for GitHub Copilot API.
 
-    This is the ONLY function agents/tools should call to get an LLM.
-    Drop-in replacement for the old ChatOpenAI(api_key=...) pattern.
+    ChatOpenAI is imported at module load (top of file) — no cold-start delay.
+    A fresh instance is returned each call so token + model changes are picked up.
 
     Args:
         temperature: LLM temperature (0-1)
         streaming:   Whether to enable streaming
-        model:       Model name override (default: gpt-4o-mini)
+        model:       Model name override (default: active model)
 
     Returns:
         ChatOpenAI instance configured for Copilot API
@@ -552,8 +553,6 @@ def get_llm(
     Raises:
         RuntimeError: If provider is not initialized or auth is required
     """
-    from langchain_openai import ChatOpenAI
-
     if _token_manager is None:
         raise RuntimeError(
             "LLM provider not initialized. "
@@ -573,6 +572,6 @@ def get_llm(
         temperature=temperature,
         streaming=streaming,
         openai_api_key=_token_manager.token,
-        openai_api_base=f"{COPILOT_API_BASE}",
+        openai_api_base=COPILOT_API_BASE,
         default_headers=COPILOT_HEADERS,
     )
