@@ -2,6 +2,9 @@
 AI Chat Route — LangGraph Agent with SSE Streaming
 Sidebar chat that acts as a system design mentor.
 Uses a LangGraph agent that can optionally fetch page context.
+
+Chat history persists in-memory during a session.
+Call clear_chat_history endpoint on page load/reload to reset.
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -14,7 +17,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from bson import ObjectId
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 from Agents.chat_agent.graph import create_chat_agent_graph
 
@@ -25,7 +28,7 @@ from database.database import db
 
 chat = APIRouter(prefix="/sessions", tags=["AI Chat"])
 
-# Store chat history per session (in-memory, keyed by session_id)
+# In-memory chat history per session (cleared on page reload via clear endpoint)
 chat_histories: Dict[str, List] = {}
 
 
@@ -37,6 +40,17 @@ class ChatRequest(BaseModel):
 @chat.post("/chat/health")
 async def chat_health_check():
     return {"status": "healthy"}
+
+
+@chat.post("/{session_id}/clear-history")
+async def clear_chat_history(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Clear chat history for a session. Call this on page load/reload."""
+    if session_id in chat_histories:
+        del chat_histories[session_id]
+    return {"status": "cleared", "session_id": session_id}
 
 
 @chat.post("/{session_id}/ai-chat")
@@ -64,16 +78,18 @@ async def chat_with_ai(
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    problem_title    = problem.get("title", "System Design Problem")
+    problem_title = problem.get("title", "System Design Problem")
     problem_description = problem.get("description", "No description provided.")
-    requirements     = ", ".join(problem.get("requirements", []))
-    diagram_data     = request.diagram_data
+    requirements = ", ".join(problem.get("requirements", []))
+    diagram_data = request.diagram_data
 
+    # Initialize history for new sessions
     if session_id not in chat_histories:
         chat_histories[session_id] = []
 
     history = chat_histories[session_id]
 
+    # Build messages from history (last 10 exchanges)
     langchain_messages = []
     for msg in history[-10:]:
         if msg["role"] == "user":
@@ -91,9 +107,7 @@ async def chat_with_ai(
         diagram_data=diagram_data
     )
 
-    # ── Shared cursor so we can drain new batches as they land ──────────────
-    # streamed_batches is a list that the tool appends to during graph execution.
-    # We track how many we've already sent so we can flush new ones in real-time.
+    # Track streamed batches for real-time updates
     streamed_batches: list = graph._streamed_diagram_batches
     last_sent_idx = 0
 
@@ -104,7 +118,7 @@ async def chat_with_ai(
         while last_sent_idx < len(streamed_batches):
             batch = streamed_batches[last_sent_idx]
             elements = batch.get("elements", [])
-            label    = batch.get("label", "Building...")
+            label = batch.get("label", "Building...")
             progress = batch.get("progress", "")
             if elements:
                 events.append(f"data: {json.dumps({'type': 'diagram_update', 'elements': elements, 'label': label, 'progress': progress})}\n\n")
@@ -122,7 +136,7 @@ async def chat_with_ai(
             ):
                 kind = event.get("event", "")
 
-                # ── Token stream ────────────────────────────────────────────
+                # Token stream
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
@@ -131,7 +145,7 @@ async def chat_with_ai(
                             collected_response += token
                             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
-                # ── Tool call started ───────────────────────────────────────
+                # Tool call started
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "")
                     if tool_name == "get_page_context":
@@ -142,22 +156,23 @@ async def chat_with_ai(
                         status = f"Running {tool_name}..."
                     yield f"data: {json.dumps({'type': 'status', 'content': status})}\n\n"
 
-                # ── Tool call finished — flush any new diagram batches NOW ──
+                # Tool call finished - flush diagram batches
                 elif kind == "on_tool_end":
                     for sse_event in drain_new_batches():
                         yield sse_event
 
-            # ── After graph completes — flush any remaining batches ─────────
+            # Flush remaining batches
             for sse_event in drain_new_batches():
                 yield sse_event
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
+            # Save assistant response to history
             if collected_response:
                 history.append({"role": "assistant", "content": collected_response})
-
-            if len(history) > 10:
-                chat_histories[session_id] = history[-10:]
+                # Keep only last 20 messages (10 exchanges)
+                if len(history) > 20:
+                    chat_histories[session_id] = history[-20:]
 
         except Exception as e:
             import traceback
